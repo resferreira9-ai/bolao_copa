@@ -21,7 +21,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.properties import PageSetupProperties
-from openpyxl.formatting.rule import CellIsRule, DataBarRule
+from openpyxl.formatting.rule import CellIsRule, DataBarRule, FormulaRule
 from datetime import date
 
 OUT = "Controle_de_Gastos_Japao.xlsx"
@@ -133,11 +133,14 @@ def section(ws, r, c1, c2, texto, cor=INK, altura=20):
 
 
 # ================================================================== dados
-# --- o unico gasto ja realizado, informado pelo viajante
-PASSAGENS_BRL = 8218.93
+# --- passagens: valor, parcelamento e data da 1a parcela informados pelo viajante
+PASSAGENS_BRL = 16437.86
+PASSAGENS_PARCELAS = 9
+PASSAGENS_1A_PARCELA = date(2026, 9, 3)
 
 IDA, VOLTA = date(2027, 4, 30), date(2027, 5, 16)
 VIAJANTES = 2
+DIA_VENCIMENTO = 3            # dia do mes em que as parcelas caem
 
 # --- cotacoes: apuradas em 15/08/2026, com a fonte registrada na propria planilha
 COTACOES = [
@@ -181,7 +184,7 @@ CIDADES = [
 ]
 STATUS_RESERVA = ["A fazer", "Pesquisando", "Reservado", "Pago"]
 
-FIRST, LAST = 7, 400          # linhas de lancamento na aba Gastos (cabecalho na 6)
+FIRST, LAST = 7, 180          # linhas de lancamento na aba Gastos (cabecalho na 6)
 CAP = 20                      # linhas reservadas por lista na aba Listas
 
 wb = Workbook()
@@ -203,10 +206,10 @@ section(pa, 6, 2, 3, "DADOS DA VIAGEM")
 section(pa, 6, 5, 7, "CÂMBIO — quanto vale 1 unidade em R$", ACCENT)
 
 campos = [
-    ("Destino", "Japão", "General"),
     ("Data de ida", IDA, F_DATE),
     ("Data de volta", VOLTA, F_DATE),
     ("Nº de viajantes", VIAJANTES, F_INT),
+    ("Parcelas vencem todo dia", DIA_VENCIMENTO, F_INT),
 ]
 r = 7
 for label, val, fmt in campos:
@@ -219,7 +222,7 @@ for label, val, fmt in campos:
     r += 1
 
 for label, formula, fmt in (
-    ("Duração (dias)", '=IFERROR($C$9-$C$8+1,"")', F_INT),
+    ("Duração (dias)", '=IFERROR($C$8-$C$7+1,"")', F_INT),
     ("Orçamento total (R$)", "=SUM($C$25:$C$37)", F_BRL),
 ):
     pa.cell(row=r, column=2, value=label).font = f(10, False, GREY)
@@ -259,20 +262,18 @@ pa.row_dimensions[13].height = 12
 section(pa, 14, 2, 9, "RESUMO")
 
 GASTO = f'SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$G${FIRST}:$G${LAST},"<>Reembolsado")'
+FALTA_PARC = f'SUMIFS(Gastos!$O${FIRST}:$O${LAST},Gastos!$G${FIRST}:$G${LAST},"Parcelado")'
 KPIS = [
     (16, 2, "TOTAL GASTO", f"={GASTO}", F_BRL, INK, CARD_BG),
-    (16, 4, "JÁ PAGO",
-     f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$G${FIRST}:$G${LAST},"Pago")', F_BRL, TEAL, OK_BG),
-    (16, 6, "EM ABERTO",
-     f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$G${FIRST}:$G${LAST},"Pendente")'
-     f'+SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$G${FIRST}:$G${LAST},"Parcelado")', F_BRL, AMBER, WARN_BG),
-    (16, 8, "SALDO DO ORÇAMENTO", f'=IF($C$12=0,"",$C$12-$B$17)', F_BRL, BLUE, INFO_BG),
-    (19, 2, "GASTO POR PESSOA", '=IFERROR($B$17/$C$10,0)', F_BRL, INK, CARD_BG),
+    (16, 4, "JÁ PAGO (parcelas incluídas)", f"=SUM(Gastos!$N${FIRST}:$N${LAST})", F_BRL, TEAL, OK_BG),
+    (16, 6, "AINDA A PAGAR", f"=SUM(Gastos!$O${FIRST}:$O${LAST})", F_BRL, AMBER, WARN_BG),
+    (16, 8, "SALDO DO ORÇAMENTO", '=IF($C$12=0,"",$C$12-$B$17)', F_BRL, BLUE, INFO_BG),
+    (19, 2, "GASTO POR PESSOA", '=IFERROR($B$17/$C$9,0)', F_BRL, INK, CARD_BG),
     (19, 4, "GASTO POR DIA DE VIAGEM", '=IFERROR($B$17/$C$11,0)', F_BRL, INK, CARD_BG),
-    (19, 6, "GASTOS ANTES DE EMBARCAR",
-     f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$A${FIRST}:$A${LAST},"<"&$C$8)', F_BRL, GREY, MUTE_BG),
-    (19, 8, "GASTOS DURANTE A VIAGEM",
-     f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$A${FIRST}:$A${LAST},">="&$C$8)', F_BRL, ACCENT, CARD_BG),
+    (19, 6, "FALTA PAGAR EM PARCELAS", f"={FALTA_PARC}", F_BRL, ACCENT, ALERT_BG),
+    (19, 8, "PRÓXIMA PARCELA VENCE EM",
+     f'=IF({FALTA_PARC}=0,"",DATE(YEAR(TODAY()),MONTH(TODAY())+IF(DAY(TODAY())>=$C$10,1,0),$C$10))',
+     F_DATE, ACCENT, ALERT_BG),
 ]
 for rl, c1, titulo, formula, fmt, cor, bg in KPIS:
     c2 = c1 + 1
@@ -315,9 +316,8 @@ for i in range(len(CATEGORIAS)):
     for col, formula in (
         (4, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$B${FIRST}:$B${LAST},$B{rr},'
             f'Gastos!$G${FIRST}:$G${LAST},"<>Reembolsado")'),
-        (5, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$B${FIRST}:$B${LAST},$B{rr},'
-            f'Gastos!$G${FIRST}:$G${LAST},"Pago")'),
-        (6, f'=$D{rr}-$E{rr}'),
+        (5, f'=SUMIFS(Gastos!$N${FIRST}:$N${LAST},Gastos!$B${FIRST}:$B${LAST},$B{rr})'),
+        (6, f'=SUMIFS(Gastos!$O${FIRST}:$O${LAST},Gastos!$B${FIRST}:$B${LAST},$B{rr})'),
         (7, f'=IFERROR($D{rr}/$D$38,0)'),
         (8, f'=IF($C{rr}="","",$C{rr}-$D{rr})'),
         (9, f'=COUNTIFS(Gastos!$B${FIRST}:$B${LAST},$B{rr})'),
@@ -362,9 +362,8 @@ for i in range(len(PAGAMENTOS)):
     a.font = f(10, False, INK); a.alignment = left(indent=1)
     for col, formula in (
         (3, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$F${FIRST}:$F${LAST},$B{rr})'),
-        (4, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$F${FIRST}:$F${LAST},$B{rr},'
-            f'Gastos!$G${FIRST}:$G${LAST},"Pago")'),
-        (5, f'=$C{rr}-$D{rr}'),
+        (4, f'=SUMIFS(Gastos!$N${FIRST}:$N${LAST},Gastos!$F${FIRST}:$F${LAST},$B{rr})'),
+        (5, f'=SUMIFS(Gastos!$O${FIRST}:$O${LAST},Gastos!$F${FIRST}:$F${LAST},$B{rr})'),
     ):
         cell = pa.cell(row=rr, column=col, value=formula)
         cell.font = f(10, False, INK); cell.alignment = right(); cell.number_format = F_BRL
@@ -376,8 +375,7 @@ for i in range(len(PESSOAS)):
     a.font = f(10, False, INK); a.alignment = left(indent=1)
     for col, formula in (
         (8, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$E${FIRST}:$E${LAST},$G{rr})'),
-        (9, f'=SUMIFS(Gastos!$J${FIRST}:$J${LAST},Gastos!$E${FIRST}:$E${LAST},$G{rr},'
-            f'Gastos!$G${FIRST}:$G${LAST},"Pendente")'),
+        (9, f'=SUMIFS(Gastos!$O${FIRST}:$O${LAST},Gastos!$E${FIRST}:$E${LAST},$G{rr})'),
     ):
         cell = pa.cell(row=rr, column=col, value=formula)
         cell.font = f(10, False, INK); cell.alignment = right(); cell.number_format = F_BRL
@@ -392,6 +390,9 @@ LINHAS_GUIA = [
     ("3.  Lance cada gasto na aba GASTOS, uma linha por gasto. As colunas com seta abrem menu suspenso.", False),
     ("4.  Digite o valor na moeda em que pagou e escolha a moeda — a conversão para real é automática.", False),
     ("5.  Marque o STATUS (Pago / Pendente / Parcelado / Reembolsado). Este painel se atualiza sozinho.", False),
+    ("6.  PARCELOU? Marque o status como \"Parcelado\", preencha o Nº de parcelas e a data da 1ª parcela. "
+     "A planilha conta sozinha quantas já venceram e joga o valor certo em \"Já pago\" a cada mês — "
+     "sem você precisar mexer em nada. Se esquecer de preencher, a célula fica vermelha.", False),
     ("ATENÇÃO: a viagem começa dentro da Golden Week japonesa (29/04 a 05/05/2027), "
      "o feriadão mais movimentado do Japão. Veja o alerta na aba ROTEIRO antes de reservar qualquer coisa.", True),
     ("Amarelo = você preenche.    Cinza = calculado automaticamente, não precisa mexer.", True),
@@ -413,20 +414,24 @@ gs.sheet_view.showGridLines = False
 gs.sheet_properties.tabColor = ACCENT
 
 COLS = [
-    ("Data", 12, F_DATE, "in"), ("Categoria", 32, "General", "in"),
-    ("Descrição", 36, "General", "in"), ("Cidade / Local", 20, "General", "in"),
-    ("Quem pagou", 15, "General", "in"), ("Forma de pagamento", 24, "General", "in"),
-    ("Status", 13, "General", "in"), ("Moeda", 9, "General", "in"),
-    ("Valor pago", 14, F_NUM, "in"), ("Valor em R$", 15, F_BRL, "calc"),
-    ("Observações", 40, "General", "in"),
+    ("Data", 11, F_DATE, "in"), ("Categoria", 30, "General", "in"),
+    ("Descrição", 34, "General", "in"), ("Cidade / Local", 18, "General", "in"),
+    ("Quem pagou", 14, "General", "in"), ("Forma de pagamento", 22, "General", "in"),
+    ("Status", 12, "General", "in"), ("Moeda", 8, "General", "in"),
+    ("Valor pago", 13, F_NUM, "in"), ("Valor total (R$)", 15, F_BRL, "calc"),
+    ("Nº de parcelas", 11, F_INT, "in"), ("1ª parcela em", 12, F_DATE, "in"),
+    ("Parcelas pagas", 12, F_INT, "calc"), ("Já pago (R$)", 14, F_BRL, "calc"),
+    ("Ainda a pagar (R$)", 15, F_BRL, "calc"), ("Observações", 38, "General", "in"),
 ]
+NC = len(COLS)                                     # 16 colunas, A ate P
 for i, (h, w, _, _) in enumerate(COLS):
     gs.column_dimensions[get_column_letter(i + 1)].width = w
 
-banner(gs, 1, 11, "LANÇAMENTO DE GASTOS  •  JAPÃO 2027",
-       "Uma linha por gasto. \"Valor em R$\" é calculado pela cotação do Painel — não digite nada nessa coluna.")
+banner(gs, 1, NC, "LANÇAMENTO DE GASTOS  •  JAPÃO 2027",
+       "Uma linha por gasto. As colunas cinza são calculadas sozinhas — inclusive as parcelas, "
+       "que avançam automaticamente a cada vencimento.")
 
-gs.row_dimensions[6].height = 26
+gs.row_dimensions[6].height = 30
 for i, (h, _, _, kind) in enumerate(COLS):
     cell = gs.cell(row=6, column=i + 1, value=h)
     cell.font = f(9, True, "FFFFFF")
@@ -435,6 +440,7 @@ for i, (h, _, _, kind) in enumerate(COLS):
 
 HEAD = 6
 FIRST_G = FIRST
+CALC_COLS = (10, 13, 14, 15)
 
 for rr in range(FIRST_G, LAST + 1):
     gs.row_dimensions[rr].height = 18
@@ -445,38 +451,40 @@ for rr in range(FIRST_G, LAST + 1):
         cell.font = f(10, False, INK)
         cell.number_format = fmt
         cell.fill = fill(CALC_BG) if kind == "calc" else band
-        cell.alignment = right() if col in (9, 10) else (
-            center() if col in (1, 7, 8) else left(indent=1))
+        cell.alignment = right() if col in (9, 10, 14, 15) else (
+            center() if col in (1, 7, 8, 11, 12, 13) else left(indent=1))
         cell.border = Border(bottom=thin)
+
+    # J: valor convertido para real pela cotacao do Painel
     gs.cell(row=rr, column=10).value = (
         f'=IF($I{rr}="","",IFERROR($I{rr}*INDEX(TAXAS,MATCH($H{rr},MOEDAS,0)),""))')
+    # M: quantas parcelas ja venceram ate hoje (TODAY() reavalia a cada abertura)
+    gs.cell(row=rr, column=13).value = (
+        f'=IF($G{rr}<>"Parcelado",0,IF(OR($K{rr}="",$L{rr}=""),0,'
+        f'MIN($K{rr},MAX(0,(YEAR(TODAY())-YEAR($L{rr}))*12'
+        f'+(MONTH(TODAY())-MONTH($L{rr}))+IF(DAY(TODAY())>=DAY($L{rr}),1,0)))))')
+    # N: quanto ja saiu do bolso
+    gs.cell(row=rr, column=14).value = (
+        f'=IF($J{rr}="","",IF($G{rr}="Pago",$J{rr},IF($G{rr}="Reembolsado",0,'
+        f'IF($G{rr}="Parcelado",IFERROR($J{rr}/$K{rr}*$M{rr},0),0))))')
+    # O: quanto ainda falta
+    gs.cell(row=rr, column=15).value = (
+        f'=IF($J{rr}="","",IF($G{rr}="Reembolsado",0,$J{rr}-$N{rr}))')
 
-# gasto real ja informado pelo viajante
-real = [None, "Passagens Aéreas", "Passagens aéreas Brasil - Tóquio (ida e volta, 2 pessoas)",
-        "Brasil (pré-viagem)", "Dividido", None, "Pago", "BRL", PASSAGENS_BRL, None,
-        "Valor informado por você. Preencha a data da compra e a forma de pagamento."]
-for i, v in enumerate(real):
-    if v is not None:
-        gs.cell(row=FIRST_G, column=i + 1).value = v
-for col in (1, 6):                                   # data e forma de pagamento em aberto
+# passagens: valores e parcelamento informados pelo viajante
+real = {2: "Passagens Aéreas", 3: "Passagens aéreas Brasil - Tóquio (ida e volta, 2 pessoas)",
+        4: "Brasil (pré-viagem)", 5: "Dividido", 7: "Parcelado", 8: "BRL",
+        9: PASSAGENS_BRL, 11: PASSAGENS_PARCELAS, 12: PASSAGENS_1A_PARCELA,
+        16: f"Parcelado em {PASSAGENS_PARCELAS}x, todo dia {DIA_VENCIMENTO}. "
+            f"Preencha a data da compra e a forma de pagamento."}
+for col, v in real.items():
+    gs.cell(row=FIRST_G, column=col).value = v
+for col in (1, 6):                                   # ainda faltam: data e forma de pagamento
     gs.cell(row=FIRST_G, column=col).fill = fill(INPUT_BG)
-gs.cell(row=FIRST_G, column=11).font = f(9, False, AMBER, italic=True)
+gs.cell(row=FIRST_G, column=16).font = f(9, False, AMBER, italic=True)
 
-# unica linha de exemplo, marcada para ser apagada
-exemplo = [date(2027, 5, 1), "Alimentação", "EXEMPLO — APAGUE ESTA LINHA", "Tóquio",
-           "Viajante 1", "Dinheiro (iene)", "Pago", "JPY", 3200, None,
-           "Mostra a conversão automática: 3.200 ienes viram reais sozinhos."]
-ex_row = FIRST_G + 1
-for i, v in enumerate(exemplo):
-    if v is not None:
-        gs.cell(row=ex_row, column=i + 1).value = v
-for col in range(1, 12):
-    cell = gs.cell(row=ex_row, column=col)
-    cell.fill = fill(ALERT_BG)
-    cell.font = f(10 if col != 11 else 9, col == 3, ACCENT, italic=True)
-
-gs.freeze_panes = f"A{FIRST_G}"
-gs.auto_filter.ref = f"A{HEAD}:K{LAST}"
+gs.freeze_panes = f"D{FIRST_G}"
+gs.auto_filter.ref = f"A{HEAD}:{get_column_letter(NC)}{LAST}"
 
 for nome, ref, msg in (
     ("CATEGORIAS", f"B{FIRST_G}:B{LAST}", "Escolha uma categoria (editável na aba Listas)."),
@@ -491,10 +499,23 @@ for nome, ref, msg in (
     dv.prompt = msg; dv.promptTitle = nome.capitalize()
     gs.add_data_validation(dv); dv.add(ref)
 
+dv_par = DataValidation(type="whole", operator="between", formula1=1, formula2=60,
+                        allow_blank=True)
+dv_par.prompt = "Quantas vezes foi dividido? Deixe em branco se pagou à vista."
+dv_par.promptTitle = "Nº de parcelas"
+dv_par.error = "Informe um número inteiro de 1 a 60."
+gs.add_data_validation(dv_par); dv_par.add(f"K{FIRST_G}:K{LAST}")
+
 for texto, bg, fg in (("Pago", OK_BG, TEAL), ("Pendente", WARN_BG, AMBER),
                       ("Parcelado", INFO_BG, BLUE), ("Reembolsado", MUTE_BG, GREY)):
     gs.conditional_formatting.add(f"G{FIRST_G}:G{LAST}", CellIsRule(
         operator="equal", formula=[f'"{texto}"'], fill=fill(bg), font=f(10, True, fg)))
+
+# marca em vermelho o parcelamento sem nº de parcelas ou sem a data da 1ª parcela
+for coluna in ("K", "L"):
+    gs.conditional_formatting.add(f"{coluna}{FIRST_G}:{coluna}{LAST}", FormulaRule(
+        formula=[f'AND($G{FIRST_G}="Parcelado",{coluna}{FIRST_G}="")'],
+        fill=fill(ALERT_BG), font=f(10, True, ACCENT)))
 
 # =================================================================== ROTEIRO
 ro = wb.create_sheet("Roteiro")
@@ -772,10 +793,10 @@ for rr in range(D1, D2 + 1):
     pd_.row_dimensions[rr].height = 18
     band = fill("FFFFFF") if (rr - D1) % 2 == 0 else fill(BAND)
     if rr == D1:
-        pd_.cell(row=rr, column=1, value='=IF(Painel!$C$8="","",Painel!$C$8)')
+        pd_.cell(row=rr, column=1, value='=IF(Painel!$C$7="","",Painel!$C$7)')
     else:
         pd_.cell(row=rr, column=1,
-                 value=f'=IF($A{rr-1}="","",IF($A{rr-1}+1>Painel!$C$9,"",$A{rr-1}+1))')
+                 value=f'=IF($A{rr-1}="","",IF($A{rr-1}+1>Painel!$C$8,"",$A{rr-1}+1))')
     pd_.cell(row=rr, column=2, value=f'=IF($A{rr}="","",SUMIFS(Gastos!$J${FIRST}:$J${LAST},'
                                      f'Gastos!$A${FIRST}:$A${LAST},$A{rr}))')
     pd_.cell(row=rr, column=3, value=f'=IF($A{rr}="","",SUM($B${D1}:$B{rr}))')
@@ -866,7 +887,7 @@ for ws, titulos in ((pa, None), (gs, "6:6"), (ro, None), (pd_, "6:6"), (ls, None
         ws.print_title_rows = titulos
 
 pa.print_area = f"A1:I{PAINEL_FIM}"
-gs.print_area = "A1:K206"
+gs.print_area = "A1:P180"
 ro.print_area = f"A1:K{ROTEIRO_FIM}"
 pd_.print_area = f"A1:I{tot}"
 ls.print_area = f"A1:M{6+CAP+2}"
